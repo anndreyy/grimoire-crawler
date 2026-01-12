@@ -314,28 +314,125 @@ async function processNovel(novelUrl, startChapter = null, endChapter = null) {
 
     } catch (error) {
         log.error(`Erro Crítico: ${error.message}`);
+        throw error; // Propaga op erro para o worker
     } finally {
         await closeBrowser();
     }
 }
 
+async function processNextJob() {
+    // 1. Buscar job pendente
+    const { data: jobs, error: fetchError } = await supabase
+        .from('crawler_queue')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+    if (fetchError) {
+        log.error(`Erro ao buscar jobs: ${fetchError.message}`);
+        return false;
+    }
+
+    if (!jobs || jobs.length === 0) {
+        return false;
+    }
+
+    const job = jobs[0];
+    log.info(`Job encontrado: ${job.id} - ${job.target_url}`);
+    if (job.requested_by) log.info(`Solicitado por: ${job.requested_by}`);
+
+    // 2. Marcar como processando
+    const { error: updateError } = await supabase
+        .from('crawler_queue')
+        .update({ status: 'processing', updated_at: new Date().toISOString() })
+        .eq('id', job.id);
+
+    if (updateError) {
+        log.error(`Erro ao atualizar job para processing: ${updateError.message}`);
+        return false;
+    }
+
+    try {
+        // 3. Executar Crawler
+        await processNovel(job.target_url, job.start_chapter, job.end_chapter);
+
+        // 4. Sucesso
+        await supabase
+            .from('crawler_queue')
+            .update({ status: 'completed', updated_at: new Date().toISOString() })
+            .eq('id', job.id);
+
+        log.success(`Job ${job.id} concluído com sucesso.`);
+
+    } catch (err) {
+        // 5. Falha
+        log.error(`Job ${job.id} falhou: ${err.message}`);
+        await supabase
+            .from('crawler_queue')
+            .update({
+                status: 'failed',
+                error_message: err.message,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', job.id);
+    }
+
+    return true; // Processou um job
+}
+
+async function startWorker() {
+    log.info('Iniciando Worker de Crawler...');
+    log.info('Pressione Ctrl+C para parar.');
+
+    while (true) {
+        const processed = await processNextJob();
+
+        if (!processed) {
+            // Se não processou nada (fila vazia ou erro fetch), espera
+            process.stdout.write('.'); // Heartbeat visual
+            await sleep(30000); // 30 segundos
+        } else {
+            // Se processou, espera um pouco menos para não sobrecarregar
+            await sleep(5000);
+        }
+    }
+}
+
 // Entry Point
-const urlArg = process.argv[2];
-const startArg = process.argv[3];
-const endArg = process.argv[4];
+// Entry Point
+const arg = process.argv[2];
 
-console.log('ARGS:', process.argv);
+if (arg === '--worker' || arg === 'worker') {
+    startWorker();
+} else if (arg) {
+    // Modo CLI Clássico
+    // Se for URL, assume processamento direto
+    const startArg = process.argv[3];
+    const endArg = process.argv[4];
 
-if (urlArg) {
     if (startArg && endArg) {
-        processNovel(urlArg, parseInt(startArg), parseInt(endArg));
+        processNovel(arg, parseInt(startArg), parseInt(endArg)).catch(() => process.exit(1));
     } else {
-        processNovel(urlArg);
+        processNovel(arg).catch(() => process.exit(1));
     }
 } else {
+    // Menu Interativo
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('URL da Novel: ', (url) => {
-        rl.close();
-        if (url) processNovel(url.trim());
+
+    console.log('\n--- Grimoire Crawler ---');
+    console.log('1. Inserir URL Manualmente');
+    console.log('2. Iniciar Worker (Fila)');
+
+    rl.question('Escolha uma opção: ', (option) => {
+        if (option === '2') {
+            rl.close();
+            startWorker();
+        } else {
+            rl.question('URL da Novel: ', (url) => {
+                rl.close();
+                if (url) processNovel(url.trim()).catch(() => process.exit(1));
+            });
+        }
     });
 }
