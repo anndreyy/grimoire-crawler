@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Debug: Crawler (Interactive)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/crawler.js",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Debug: Central Novel (Range 4-6)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/crawler.js",
+            "args": [
+                "https://centralnovel.com/series/circle-of-inevitability/",
+                "7",
+                "8"
+            ],
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Debug: FanMTL (Rebirth)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/crawler.js",
+            "args": [
+                "https://www.fanmtl.com/novel/rebirth-of-the-urban-immortal-cultivator.html"
+            ],
+            "console": "integratedTerminal"
+        }
+    ]
+}
