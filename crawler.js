@@ -3,18 +3,22 @@ import { createClient } from '@supabase/supabase-js';
 import { createId } from '@paralleldrive/cuid2';
 import dotenv from 'dotenv';
 import readline from 'readline';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+
+puppeteer.use(StealthPlugin());
 import fs from 'fs';
 import path from 'path';
 
 // Importa Conectores
 import { fanmtl } from './connectors/fanmtl.js';
 import { centralnovel } from './connectors/centralnovel.js';
+import { novelbin } from './connectors/novelbin.js';
 
 dotenv.config();
 
 // Lista de Conectores Disponíveis
-const CONNECTORS = [fanmtl, centralnovel];
+const CONNECTORS = [fanmtl, centralnovel, novelbin];
 
 // Verifica variáveis de ambiente
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
@@ -96,6 +100,7 @@ async function fetchPage(url, headers = {}) {
         }
 
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
         await sleep(3000); // Espera carregamento dinâmico/Cloudflare
 
         const content = await page.content();
@@ -212,36 +217,82 @@ async function processNovel(novelUrl, startChapter = null, endChapter = null) {
                 description: metadata.description,
                 cover_url: metadata.coverUrl,
                 source_url: novelUrl,
+                status: metadata.status || 'PUBLISHED',
+                language: metadata.language || 'pt-BR',
+                category: metadata.category,
+                slug: metadata.slug || metadata.title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, ''),
                 updated_at: new Date().toISOString()
             }, { onConflict: 'id' });
 
         if (novelError) throw new Error(`Erro DB Novel: ${novelError.message}`);
         log.success(`Novel salva com sucesso!`);
 
+        // 2.1 Salvar Glossários (se houver)
+        if (metadata.glossaries && Array.isArray(metadata.glossaries) && metadata.glossaries.length > 0) {
+            log.info(`Encontrados ${metadata.glossaries.length} termos de glossário.`);
+            const glossariesToInsert = metadata.glossaries.map(g => ({
+                id: createId(),
+                novel_id: novelId,
+                original_term: g.original_term,
+                translated_term: g.translated_term,
+                context: g.context,
+                created_at: new Date().toISOString()
+            }));
+
+            const { error: glossError } = await supabase
+                .from('novel_glossaries')
+                .upsert(glossariesToInsert, { onConflict: 'id' }); // Consider review conflict strategy
+
+            if (glossError) log.error(`Erro ao salvar glossários: ${glossError.message}`);
+            else log.success(`Glossários salvos.`);
+        }
+
         // 3. Preparar Capítulos
         let chapterLinks = [];
 
-        if (startChapter && endChapter) {
-            // Modo Range: Conector gera as URLs
-            if (connector.generateChapterUrls) {
+        if (startChapter) {
+            // Modo Range:
+            // Se tivermos start e end, e o conector diz que suporta geração, tentamos usar.
+            // Mas para NovelBin (slug complexo), o 'generateChapterUrls' pode não existir ou usuário pode preferir LIST.
+            // Aqui damos preferência ao modo LIST se o conector tiver getChapterListUrl.
+
+            if (startChapter && endChapter && connector.generateChapterUrls && !connector.getChapterListUrl) {
                 chapterLinks = connector.generateChapterUrls(novelUrl, startChapter, endChapter);
             } else {
-                log.warn(`O conector ${connector.name} não suporta geração de URLs por intervalo.`);
-                log.info(`Tentando usar modo List (Scraping)...`);
-                startChapter = null; endChapter = null; // Reseta para forçar modo list
-                chapterLinks = connector.extractChapterLinks($, novelUrl);
+                if (startChapter && !endChapter) {
+                    log.info(`Modo: A partir do capítulo ${startChapter}`);
+                }
+
+                // Busca lista completa (Scraping ou AJAX)
+                if (connector.getChapterListUrl) {
+                    const listUrl = connector.getChapterListUrl(novelUrl);
+                    log.info(`Buscando lista completa via: ${listUrl}`);
+                    const $list = await fetchPage(listUrl, connector.config.headers);
+                    chapterLinks = connector.extractChapterLinks($list, novelUrl);
+                } else {
+                    chapterLinks = connector.extractChapterLinks($, novelUrl);
+                }
             }
         } else {
-            // Modo Lista: Conector extrai da página
-            chapterLinks = connector.extractChapterLinks($, novelUrl);
+            // Modo Lista Completa (sem range)
+            if (connector.getChapterListUrl) {
+                const listUrl = connector.getChapterListUrl(novelUrl);
+                log.info(`Buscando lista completa via: ${listUrl}`);
+                const $list = await fetchPage(listUrl, connector.config.headers);
+                chapterLinks = connector.extractChapterLinks($list, novelUrl);
+            } else {
+                chapterLinks = connector.extractChapterLinks($, novelUrl);
+            }
         }
 
         log.info(`Encontrados ${chapterLinks.length} capítulos no total.`);
 
-        // Filtra se o usuario passou range num conector que só suporta scraping mas retorna números
-        if (startChapter && endChapter && chapterLinks.length > 0) {
-            log.info(`Filtrando lista para intervalo: ${startChapter} - ${endChapter}`);
-            chapterLinks = chapterLinks.filter(c => c.number >= startChapter && c.number <= endChapter);
+        // Filtra se o usuario passou range num conector que usa scraping
+        if (startChapter && chapterLinks.length > 0) {
+            const endFilter = endChapter || 999999; // Se não tem fim, vai até o infinito
+            const labelEnd = endChapter || 'Fim';
+            log.info(`Filtrando lista para intervalo: ${startChapter} - ${labelEnd}`);
+            chapterLinks = chapterLinks.filter(c => c.number >= startChapter && c.number <= endFilter);
         }
 
         log.info(`Processando ${chapterLinks.length} capítulos...`);
@@ -253,20 +304,25 @@ async function processNovel(novelUrl, startChapter = null, endChapter = null) {
             const chapterNum = number || (i + 1);
 
             const percentage = ((i + 1) / chapterLinks.length * 100).toFixed(1);
-            log.info(`[${percentage}%] [${chapterNum}/${startChapter ? endChapter : chapterLinks.length}] ${title || absoluteLink}`);
+            const totalLabel = endChapter || (chapterLinks.length > 0 ? chapterLinks[chapterLinks.length - 1].number : chapterLinks.length);
+            log.info(`[${percentage}%] [${chapterNum}/${totalLabel}] ${title || absoluteLink}`);
 
             try {
                 // Check DB antes de baixar
                 const { data: chapExists } = await supabase
                     .from('chapters')
-                    .select('id')
+                    .select('id, content')
                     .eq('novel_id', novelId)
                     .eq('chapter_number', chapterNum)
                     .single();
 
                 if (chapExists) {
-                    log.warn(`-> Já existe. Pulando.`);
-                    continue;
+                    // Se existe, verifica se o conteúdo é válido/não-vazio
+                    if (chapExists.content && chapExists.content.length > 100) {
+                        log.warn(`-> Já existe. Pulando.`);
+                        continue;
+                    }
+                    log.info(`-> Existe mas está vazio/curto (len=${chapExists.content ? chapExists.content.length : 0}). Rebaixando...`);
                 }
 
                 await sleep(connector.config.delayBetweenChapters || 2000);
@@ -411,8 +467,9 @@ if (arg === '--worker' || arg === 'worker') {
     const startArg = process.argv[3];
     const endArg = process.argv[4];
 
-    if (startArg && endArg) {
-        processNovel(arg, parseInt(startArg), parseInt(endArg)).catch(() => process.exit(1));
+    if (startArg) {
+        // Se tem startArg, pode ter endArg ou não
+        processNovel(arg, parseInt(startArg), endArg ? parseInt(endArg) : null).catch(() => process.exit(1));
     } else {
         processNovel(arg).catch(() => process.exit(1));
     }

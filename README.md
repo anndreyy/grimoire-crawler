@@ -71,8 +71,9 @@ node crawler.js "https://exemplo.com/novela-x"
 
 ## Estrutura do Banco de Dados
 
-- **Novels**: `id` (CUID), `title`, `author`, `description`, `cover_url`, `source_url`.
+- **Novels**: `id` (CUID), `title`, `author`, `description`, `cover_url`, `source_url`, `status`, `language`, `category`, `slug`.
 - **Chapters**: `id` (CUID), `novel_id`, `title`, `chapter_number`, `content` (HTML Sanitizado), `source_url`.
+- **Glossários**: `id` (CUID), `novel_id`, `original_term`, `translated_term`, `context`.
 
 ## Dependências Principais
 

@@ -53,7 +53,7 @@ export const centralnovel = {
             coverUrl = new URL(coverUrl, currentUrl).href;
         }
 
-        return { title, author, description, coverUrl };
+        return { title, author, description, coverUrl, status: 'Ongoing', category: 'Novel', language: 'pt-BR' };
     },
 
     /**

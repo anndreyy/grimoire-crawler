@@ -16,6 +16,11 @@ Armazena os metadados das obras.
 | `author` | `text` | **Sim** | Nome do autor(a). |
 | `description` | `text` | Não | Sinopse/Descrição da obra. |
 | `cover_url` | `text` | Não | URL da imagem de capa. |
+| `source_url` | `text` | Não | URL de origem. |
+| `language` | `varchar(10)` | Não | Padrão: 'pt-BR'. |
+| `status` | `text` | Não | Padrão: 'PUBLISHED'. |
+| `slug` | `text` | Não | Identificador amigável para URL. |
+| `category` | `text` | Não | Categoria da obra. |
 | `created_at` | `timestamptz` | Não | Default: `now()`. |
 | `updated_at` | `timestamptz` | Não | Default: `now()`. |
 
@@ -31,6 +36,18 @@ Armazena o conteúdo textual dos capítulos.
 | `content` | `text` | **Sim** | Conteúdo em HTML sanitizado. |
 | `created_at` | `timestamptz` | Não | Default: `now()`. |
 | `updated_at` | `timestamptz` | Não | Default: `now()`. |
+
+### Tabela: `novel_glossaries`
+Armazena termos específicos para tradução consistente.
+
+| Coluna | Tipo | Obrigatório? | Descrição |
+| :--- | :--- | :--- | :--- |
+| `id` | `text` | **Sim** | Identificador único (CUID). |
+| `novel_id` | `text` | **Sim** | ID da novela pai (FK). |
+| `original_term` | `text` | **Sim** | Termo original. |
+| `translated_term` | `text` | **Sim** | Termo traduzido. |
+| `context` | `text` | Não | Contexto de uso. |
+| `created_at` | `timestamptz` | Não | Default: `now()`. |
 
 ---
 

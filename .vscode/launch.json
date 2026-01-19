@@ -38,6 +38,19 @@
                 "https://www.fanmtl.com/novel/rebirth-of-the-urban-immortal-cultivator.html"
             ],
             "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Debug: NovelBin (Cultivation Chat Group)",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/crawler.js",
+            "args": [
+                "https://novelbin.me/novel-book/cultivation-chat-group"
+            ],
+            "console": "integratedTerminal"
         }
     ]
 }
